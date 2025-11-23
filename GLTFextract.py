@@ -647,8 +647,13 @@ def select_mesh_and_collect_prims(g, buffers):
         if faces and prims:  # pick the densest
             score = faces
             if score > best[0]: best = (score, mi, prims)
+            
     if best[1] is None:
-        raise RuntimeError("No usable mesh/primitives found.")
+        # Graceful fallback: Return None to indicate no mesh found
+        # This allows the extractor to proceed in "Animation-Only" mode
+        print("[warn] No usable mesh/primitives found. Proceeding with animation-only export.")
+        return None, []
+        
     return best[1], best[2]
 
 def find_node_with_mesh(g, mesh_index):
@@ -671,9 +676,22 @@ def export(src: Path, out_path: Path, sample_fps=20, target_int_h=2048, rotateX=
     TEXTURE_CACHE = {}
 
     mesh_idx, prims = select_mesh_and_collect_prims(g, buffers)
-    node_idx = find_node_with_mesh(g, mesh_idx)
-    skin_idx = find_skin_for_node(g, node_idx) if node_idx is not None else None
-    print(f"[pick] final mesh={mesh_idx} node={node_idx} skin={skin_idx}")
+    
+    # Handle case where no mesh exists
+    if mesh_idx is not None:
+        node_idx = find_node_with_mesh(g, mesh_idx)
+        skin_idx = find_skin_for_node(g, node_idx) if node_idx is not None else None
+        print(f"[pick] final mesh={mesh_idx} node={node_idx} skin={skin_idx}")
+    else:
+        node_idx = None
+        # Fallback: try to find the first skin in the file
+        skins = g.get("skins", [])
+        if skins:
+            skin_idx = 0
+            print(f"[pick] No mesh found, defaulting to first skin found (index 0)")
+        else:
+            skin_idx = None
+            print(f"[pick] No mesh and no skin found.")
 
     # gather
     pos_all=[]; vR=[]; vG=[]; vB=[]; faceA=[]; faceB=[]; faceC=[]
@@ -768,9 +786,20 @@ def export(src: Path, out_path: Path, sample_fps=20, target_int_h=2048, rotateX=
 
     # quantization scale by height
     ys = [y for (_,y,_) in pos_all]
-    ymin=min(ys); ymax=max(ys); h=max(1e-9, ymax-ymin)
-    qscale = target_int_h/h
-    print(f"[diag] pre-quant bbox: Y[{ymin:.6f},{ymax:.6f}]  qscale={qscale:.3f}")
+    if ys:
+        ymin=min(ys); ymax=max(ys); h=max(1e-9, ymax-ymin)
+        qscale = target_int_h/h
+        print(f"[diag] pre-quant bbox: Y[{ymin:.6f},{ymax:.6f}]  qscale={qscale:.3f}")
+    else:
+        # Default scale if no mesh data present (1 unit = 128 units in Jagex coords typically)
+        # But target_int_h is usually 2048 (character height).
+        # If we assume 1 blender unit = 128 game units, then we multiply by 128?
+        # Wait, qscale is used to scale blender units TO game units.
+        # If target is 2048 (game units), and character is 2m (blender units), scale is ~1000.
+        # Let's default to 128.0 as a safe guess if we have no mesh to measure.
+        qscale = 128.0 
+        print(f"[diag] No mesh vertices. Defaulting qscale={qscale}")
+
     frames, clip_meta, rig_meta = bake_frames(g, buffers, node_idx, skin_idx, pos_all, J_all, W_all, sample_fps, qscale)
     print(f"[diag:bake] baked frames: {len(frames)}; verts/frame={len(frames[0]['vx']) if frames else 0}")
 
@@ -801,7 +830,9 @@ def export(src: Path, out_path: Path, sample_fps=20, target_int_h=2048, rotateX=
         "faces": {"a": faceA, "b": faceB, "c": faceC},
         "vcol": {"r": vR, "g": vG, "b": vB},
         # legacy arrays used by your Java
-        "baseX": framesX[0], "baseY": framesY[0], "baseZ": framesZ[0],
+        "baseX": framesX[0] if framesX else [], 
+        "baseY": framesY[0] if framesY else [], 
+        "baseZ": framesZ[0] if framesZ else [],
         "framesX": framesX, "framesY": framesY, "framesZ": framesZ,
         "faceA": faceA, "faceB": faceB, "faceC": faceC,
         "vR": vR, "vG": vG, "vB": vB,
@@ -822,8 +853,8 @@ def export(src: Path, out_path: Path, sample_fps=20, target_int_h=2048, rotateX=
         }
     text = json.dumps(out, indent=2) if pretty else json.dumps(out)
     out_path.write_text(text)
-    print(f"[ok] wrote {out_path} (frames={len(frames)}, verts={len(framesX[0])}, faces={len(faceA)})")
-    print(f"[peek] faceA[0:5]={faceA[:5]} baseX[0:5]={framesX[0][:5]}")
+    print(f"[ok] wrote {out_path} (frames={len(frames)}, verts={len(framesX[0]) if framesX else 0}, faces={len(faceA)})")
+    # print(f"[peek] faceA[0:5]={faceA[:5]} baseX[0:5]={framesX[0][:5]}")
     return out
 
 # ---------------------------------- UI --------------------------------------
