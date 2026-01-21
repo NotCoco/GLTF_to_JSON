@@ -296,11 +296,19 @@ def sample_track(track, tsec, default):
         if T[i] <= tsec <= T[i+1]:
             a = _clamp((tsec - T[i])/(T[i+1]-T[i]), 0.0, 1.0)
             A, B = V[i], V[i+1]
-            if len(A) == 4:  # quaternion (simple lerp; good enough here)
-                return ( (1-a)*A[0]+a*B[0],
-                         (1-a)*A[1]+a*B[1],
-                         (1-a)*A[2]+a*B[2],
-                         (1-a)*A[3]+a*B[3] )
+            # if len(A) == 4:  # quaternion (simple lerp; good enough here)
+            #     return ( (1-a)*A[0]+a*B[0],
+            #              (1-a)*A[1]+a*B[1],
+            #              (1-a)*A[2]+a*B[2],
+            #              (1-a)*A[3]+a*B[3] )
+
+            if len(A) == 4:  # NLERP instead of LERP
+                dot = sum(a * b for a, b in zip(A, B))
+                B_adj = B if dot >= 0 else [-x for x in B]
+                res = [(1-a)* A[k] + a*B_adj[k] for k in range(4)]
+                mag = sum(x*x for x in res)**0.5
+                return tuple(x/mag for x in res)
+
             return tuple( (1-a)*A[k] + a*B[k] for k in range(len(A)) )
     return default
 
